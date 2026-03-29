@@ -50,6 +50,69 @@ The dual-target lab configuration is:
 - 10-byte sensor payload window at `0x10..0x19`
 - equal-rate background polling plus host-triggered direct reads/writes
 
+## External PHY Bus Demo (branch: `external-phy-bus`)
+
+This variant brings SDA and SCL out to **physical FPGA pins** via IOBUF primitives, enabling:
+
+- Real open-drain bus topology with external pull-up resistors
+- Connection to actual I3C sensors (TDK/InvenSense, etc.)
+- True electrical validation of the I3C protocol
+
+### Architecture
+
+Instead of internal wired-AND resolution, each device (controller + 2 targets) gets its own pair of physical pins:
+
+| Device | SDA Pin | SCL Pin | Cmod S7 DIP |
+|--------|---------|---------|-------------|
+| Controller | L1 | M4 | Pin 1, Pin 2 |
+| Target 0 | M3 | N2 | Pin 3, Pin 4 |
+| Target 1 | M2 | N1 | Pin 5, Pin 6 |
+
+### Wiring
+
+Connect on a breadboard:
+
+```
+SDA Bus: L1 + M3 + M2 ──┬── 2.2kΩ ── 3.3V
+                        │
+SCL Bus: M4 + N2 + N1 ──┴── 2.2kΩ ── 3.3V
+```
+
+### Build & Program
+
+```bash
+# Source Vivado
+source /opt/Xilinx/2025.2/Vivado/settings64.sh
+
+# Build bitstream
+vivado -mode batch -source scripts/build_external_bus.tcl
+
+# Program FPGA
+vivado -mode batch -source scripts/program_external_bus.tcl
+```
+
+### Files
+
+- `rtl/i3c_phy.v` — IOBUF PHY wrapper (tristate control, open-drain/push-pull modes)
+- `rtl/fpga_test/spartan7_i3c_external_bus_top.v` — Top-level with external pin mapping
+- `constraints/spartan7_i3c_external_bus.xdc` — Pin assignments and timing constraints
+
+### Usage
+
+The same FastAPI backend and Next.js dashboard work with this variant:
+
+```bash
+# Start backend
+cd software/dual_target_lab_backend
+DUAL_TARGET_LAB_PORT=/dev/ttyUSB1 uvicorn app:app --port 8000
+
+# Start frontend
+cd software/dual_target_lab_frontend
+npm run dev
+```
+
+Once wired correctly, the dashboard will show both targets responding with valid payloads — identical behavior to the internal-bus variant, but now over real physical wires.
+
 ## Larger Reference System
 
 The broader repo still includes the larger five-target reference configuration:
