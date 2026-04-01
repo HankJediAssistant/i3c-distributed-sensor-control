@@ -52,21 +52,39 @@ module i3c_target_transport #(
 
     assign sda_drive_en = sda_drive_low;
 
-    // Edge detection on SCL and SDA
+    // 2-stage synchronizers for external SCL/SDA inputs
+    // Prevents metastability with slow external edges
+    reg scl_sync1, scl_sync2;
+    reg sda_sync1, sda_sync2;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            scl_sync1 <= 1'b1;
+            scl_sync2 <= 1'b1;
+            sda_sync1 <= 1'b1;
+            sda_sync2 <= 1'b1;
+        end else begin
+            scl_sync1 <= scl;
+            scl_sync2 <= scl_sync1;
+            sda_sync1 <= sda;
+            sda_sync2 <= sda_sync1;
+        end
+    end
+
+    // Edge detection on synchronized signals
     reg scl_d, sda_d;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             scl_d <= 1'b1;
             sda_d <= 1'b1;
         end else begin
-            scl_d <= scl;
-            sda_d <= sda;
+            scl_d <= scl_sync2;
+            sda_d <= sda_sync2;
         end
     end
-    wire scl_rising  = ~scl_d &  scl;
-    wire scl_falling =  scl_d & ~scl;
-    wire sda_falling =  sda_d & ~sda;
-    wire sda_rising  = ~sda_d &  sda;
+    wire scl_rising  = ~scl_d &  scl_sync2;
+    wire scl_falling =  scl_d & ~scl_sync2;
+    wire sda_falling =  sda_d & ~sda_sync2;
+    wire sda_rising  = ~sda_d &  sda_sync2;
 
     // Single synchronous state machine
     // Priority: reset > START (sda_falling) > STOP (sda_rising) > SCL edges

@@ -50,6 +50,7 @@ module i3c_dual_target_lab_controller #(
 
     output reg                                    boot_done,
     output reg                                    boot_error,
+    output wire                                   dbg_nack_seen,
     output reg                                    capture_error,
     output reg                                    recovery_active,
     output reg  [ENDPOINT_COUNT-1:0]              verified_bitmap,
@@ -376,7 +377,8 @@ module i3c_dual_target_lab_controller #(
         .rsp_nack    (dccc_rsp_nack),
         .rsp_rx_count(dccc_rsp_rx_count),
         .rsp_rdata   (dccc_rsp_rdata),
-        .busy        (dccc_busy),
+        .busy           (dccc_busy),
+        .dbg_nack_seen  (dbg_nack_seen),
         .scl_o       (dccc_scl_o),
         .scl_oe      (dccc_scl_oe),
         .sda_o       (dccc_sda_o),

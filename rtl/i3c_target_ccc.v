@@ -256,21 +256,39 @@ module i3c_target_ccc #(
 
     assign sda_drive_en = sda_drive_low;
 
-    // Edge detection on SCL and SDA
+    // 2-stage synchronizers for external SCL/SDA inputs
+    // Prevents metastability with slow external edges
+    reg scl_sync1, scl_sync2;
+    reg sda_sync1, sda_sync2;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            scl_sync1 <= 1'b1;
+            scl_sync2 <= 1'b1;
+            sda_sync1 <= 1'b1;
+            sda_sync2 <= 1'b1;
+        end else begin
+            scl_sync1 <= scl;
+            scl_sync2 <= scl_sync1;
+            sda_sync1 <= sda;
+            sda_sync2 <= sda_sync1;
+        end
+    end
+
+    // Edge detection on synchronized signals
     reg scl_d, sda_d;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             scl_d <= 1'b1;
             sda_d <= 1'b1;
         end else begin
-            scl_d <= scl;
-            sda_d <= sda;
+            scl_d <= scl_sync2;
+            sda_d <= sda_sync2;
         end
     end
-    wire scl_rising  = ~scl_d &  scl;
-    wire scl_falling =  scl_d & ~scl;
-    wire sda_falling =  sda_d & ~sda;
-    wire sda_rising  = ~sda_d &  sda;
+    wire scl_rising  = ~scl_d &  scl_sync2;
+    wire scl_falling =  scl_d & ~scl_sync2;
+    wire sda_falling =  sda_d & ~sda_sync2;
+    wire sda_rising  = ~sda_d &  sda_sync2;
 
     // Single synchronous state machine
     // Priority: reset > START (sda_falling) > STOP (sda_rising) > SCL edges
@@ -382,7 +400,9 @@ module i3c_target_ccc #(
                 collecting_direct_data  <= collecting_direct_data;
                 collecting_broadcast_data <= collecting_broadcast_data || pending_broadcast_data;
                 collecting_entdaa_assign<= 1'b0;
-                direct_target_match     <= 1'b0;
+                // Preserve direct_target_match if we're in the middle of collecting
+                // direct data — a spurious SDA edge shouldn't invalidate the match.
+                direct_target_match     <= collecting_direct_data ? direct_target_match : 1'b0;
                 entdaa_lost            <= 1'b0;
                 read_kind               <= READ_NONE;
                 read_bit_pos            <= 4'd0;

@@ -24,6 +24,7 @@ module i3c_ctrl_direct_ccc #(
     output reg [7:0]                     rsp_rx_count,
     output reg [8*MAX_RX_BYTES-1:0]      rsp_rdata,
     output reg                           busy,
+    output wire                          dbg_nack_seen,
 
     output reg                           scl_o,
     output reg                           scl_oe,
@@ -42,6 +43,8 @@ module i3c_ctrl_direct_ccc #(
     localparam [4:0] ST_TX_BIT_H      = 5'd4;
     localparam [4:0] ST_ACK_L         = 5'd5;
     localparam [4:0] ST_ACK_H         = 5'd6;
+    localparam [4:0] ST_PRE_RSTART    = 5'd17; // SCL low to release target SDA before Sr
+    localparam [4:0] ST_PRE_ACK       = 5'd18; // SCL low to release controller SDA before T-bit
     localparam [4:0] ST_RSTART_A      = 5'd7;
     localparam [4:0] ST_RSTART_B      = 5'd8;
     localparam [4:0] ST_RX_BIT_L      = 5'd9;
@@ -205,11 +208,29 @@ module i3c_ctrl_direct_ccc #(
                     end
                     if (tick) begin
                         if (bit_idx == 0) begin
-                            state <= ST_ACK_L;
+                            // Insert a pre-ACK state when using push-pull data mode.
+                            // This ensures SDA is released (high-Z) for a full half-period
+                            // before the target's T-bit response, avoiding bus contention.
+                            state <= (PUSH_PULL_DATA && (phase == PH_TARGET_WRITE)) ? ST_PRE_ACK : ST_ACK_L;
                         end else begin
                             bit_idx <= bit_idx - 1'b1;
                             state   <= ST_TX_BIT_L;
                         end
+                    end
+                end
+
+                // Extra half-period with SCL low and SDA released before the T-bit.
+                // Needed when PUSH_PULL_DATA=1 during PH_TARGET_WRITE: the controller
+                // was driving SDA push-pull for the data bits, and we need to give
+                // the bus time to float HIGH via the pull-up before the target
+                // pulls it LOW for the ACK. Without this, controller and target
+                // fight over the bus during the T-bit sample window.
+                ST_PRE_ACK: begin
+                    scl_o  <= 1'b0;
+                    scl_oe <= 1'b1;
+                    set_sda(1'b1, 1'b1); // release SDA (open-drain HIGH = high-Z)
+                    if (tick) begin
+                        state <= ST_ACK_L;
                     end
                 end
 
@@ -240,7 +261,7 @@ module i3c_ctrl_direct_ccc #(
                                 end
                                 PH_CCC_CODE: begin
                                     phase <= PH_TARGET_ADDR;
-                                    state <= ST_RSTART_A;
+                                    state <= ST_PRE_RSTART; // dip SCL low first so target releases SDA
                                 end
                                 PH_TARGET_ADDR: begin
                                     if (target_read_lat && (rx_len_lat != 0)) begin
@@ -273,6 +294,21 @@ module i3c_ctrl_direct_ccc #(
                                 end
                             endcase
                         end
+                    end
+                end
+
+                // Dip SCL low for one half-period before the Repeated Start.
+                // The target's scl_falling detection will fire here and clear
+                // sda_drive_low, releasing the target's SDA hold from the
+                // preceding CCC-code T-bit ACK.  This lets SDA rise to the
+                // pull-up level so the true SDA falling edge of the Sr is
+                // visible on the physical bus.
+                ST_PRE_RSTART: begin
+                    scl_o  <= 1'b0;
+                    scl_oe <= 1'b1;
+                    set_sda(1'b1, 1'b1); // release SDA (high-Z → pull-up)
+                    if (tick) begin
+                        state <= ST_RSTART_A;
                     end
                 end
 
@@ -399,4 +435,6 @@ module i3c_ctrl_direct_ccc #(
             endcase
         end
     end
+assign dbg_nack_seen = nack_seen;
+
 endmodule

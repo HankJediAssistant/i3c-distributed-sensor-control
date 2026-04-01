@@ -15,7 +15,7 @@
 
 module spartan7_i3c_external_bus_top #(
     parameter integer CLK_FREQ_HZ = 100_000_000,
-    parameter integer I3C_SDR_HZ  = 12_500_000
+    parameter integer I3C_SDR_HZ  =  4_000_000   // External bus: 4 MHz (breadboard limit)
 ) (
     input  wire       clk_12mhz,
     input  wire       btn_reset,
@@ -36,7 +36,15 @@ module spartan7_i3c_external_bus_top #(
     inout  wire       tgt0_sda_pin,
     inout  wire       tgt0_scl_pin,
     inout  wire       tgt1_sda_pin,
-    inout  wire       tgt1_scl_pin
+    inout  wire       tgt1_scl_pin,
+
+    // 1 MHz open-drain test output (DIP pin 7 / N3)
+    output wire       dbg_nack_seen,
+
+    // Debug: tgt0_sda_oe visible on DIP pin 8 (P1) — push-pull output.
+    // HIGH whenever Target 0 is driving its SDA line (ACK, data, etc.)
+    // Probe this to confirm the target is responding to bus transactions.
+    output wire       dbg_tgt0_sda_oe
 );
 
     // ----------------------------------------------------------------
@@ -114,17 +122,38 @@ module spartan7_i3c_external_bus_top #(
     );
 
     // ----------------------------------------------------------------
-    // Demo start gating
+    // Demo start gating — with a 1 ms bus-idle settle delay
+    //
+    // After soft_start, hold demo_rst_n low for ~100 000 system clock
+    // cycles (1 ms at 100 MHz) before releasing the controller and
+    // targets.  This ensures the IOBUF outputs have settled and the
+    // target synchronisers have a few quiet cycles before the first
+    // SETDASA transaction hits the bus.
     // ----------------------------------------------------------------
+    localparam integer BOOT_SETTLE_CYCLES = 100_000; // 1 ms
+
     reg demo_started;
+    reg [$clog2(BOOT_SETTLE_CYCLES)-1:0] settle_cnt;
+    reg demo_settled;
+
     always @(posedge clk_100m or negedge sys_rst_n) begin
-        if (!sys_rst_n)
-            demo_started <= 1'b0;
-        else if (soft_start)
-            demo_started <= 1'b1;
+        if (!sys_rst_n) begin
+            demo_started  <= 1'b0;
+            settle_cnt    <= 'd0;
+            demo_settled  <= 1'b0;
+        end else begin
+            if (soft_start)
+                demo_started <= 1'b1;
+            if (demo_started && !demo_settled) begin
+                if (settle_cnt == BOOT_SETTLE_CYCLES - 1)
+                    demo_settled <= 1'b1;
+                else
+                    settle_cnt <= settle_cnt + 1'b1;
+            end
+        end
     end
 
-    wire demo_rst_n = sys_rst_n & demo_started;
+    wire demo_rst_n = sys_rst_n & demo_settled;
 
     // ----------------------------------------------------------------
     // Controller signals
@@ -232,6 +261,11 @@ module spartan7_i3c_external_bus_top #(
     wire tgt1_indicator;
 
     // ----------------------------------------------------------------
+    // Debug output — tgt0_sda_oe on DIP pin 8
+    // ----------------------------------------------------------------
+    assign dbg_tgt0_sda_oe = tgt0_sda_oe;
+
+    // ----------------------------------------------------------------
     // LED assignments
     // ----------------------------------------------------------------
     assign led_sample_valid[0] = tgt0_indicator;
@@ -326,6 +360,7 @@ module spartan7_i3c_external_bus_top #(
         .host_ccc_rsp_data     (ctrl_ccc_rsp_data),
         .boot_done             (boot_done),
         .boot_error            (boot_error),
+        .dbg_nack_seen         (dbg_nack_seen),
         .capture_error         (capture_error),
         .recovery_active       (recovery_active),
         .verified_bitmap       (verified_bitmap),
@@ -390,5 +425,8 @@ module spartan7_i3c_external_bus_top #(
         .dynamic_addr_valid(),
         .read_valid       ()
     );
+
+    // dbg_nack_seen is driven directly from the controller output (push-pull).
+    // DIP pin 7 (N3): goes HIGH the instant the controller sees a NACK on any T-bit.
 
 endmodule
