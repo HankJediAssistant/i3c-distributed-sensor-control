@@ -243,7 +243,7 @@ This is the fastest map of what each I3C feature does in this system and how far
 - `rtl/fpga_test/i3c_sensor_gpio_target_demo.v`: Dual-target lab wrapper with a small register map, writable LED-control register, signature bytes, and sensor-payload window.
 - `rtl/fpga_test/i3c_sensor_target_demo.v`: Target demo wrapper that combines the frame generator with the existing target transport/CCC shell.
 - `rtl/fpga_test/i3c_sensor_controller_demo.v`: Controller demo wrapper that performs static-assisted `SETDASA` boot, configures all 5 endpoints, and captures payloads into controller-side buffers.
-- `rtl/fpga_test/i3c_dual_target_lab_controller.v`: Two-target known-device controller wrapper for the CMOD lab system, including direct-CCC boot, periodic polling, host-triggered private reads/writes, and targeted `GETSTATUS`/`SETDASA` recovery.
+- `rtl/fpga_test/i3c_dual_target_lab_controller.v`: Two-target known-device controller wrapper for the CMOD lab system, including direct-CCC boot, periodic polling, host-triggered private reads/writes, and targeted `GETSTATUS`/`SETDASA` recovery. Exposes a `USE_ENTDAA` parameter (default `0`) that swaps the `SETDASA` boot path for an `ENTDAA` discovery loop, reusing `rtl/i3c_ctrl_entdaa.v` through a 3-way PHY-owner mux.
 - `rtl/fpga_test/spartan7_i3c_controller_demo_top.v`: Spartan-7 controller wrapper for the FPGA-validation stack.
 - `rtl/fpga_test/spartan7_i3c_dual_target_lab_top.v`: Dedicated CMOD S7 top for the dual-target UART-controlled lab demo.
 - `rtl/fpga_test/spartan7_i3c_target_demo_top.v`: Spartan-7 target wrapper for the FPGA-validation stack.
@@ -275,7 +275,7 @@ This is the fastest map of what each I3C feature does in this system and how far
 - `tb/tb_i3c_ctrl_top_service.v`: End-to-end controller/target regression proving scheduled policy entries turn into real class-specific write-then-read service templates, multi-byte read capture, selector writes, success/NACK service statistics, and recovery clear after repeated service failures.
 - `tb/tb_i3c_five_target_sampling_system.v`: Five-endpoint reference-system regression covering equal-rate polling, 10-byte per-endpoint sensor payloads, selector-write configuration, and round-robin service across identical targets.
 - `tb/tb_i3c_fpga_test_system.v`: FPGA-validation regression covering on-bus `SETDASA` bring-up, deterministic target signatures, and controller-side capture of all 5 endpoint streams.
-- `tb/tb_i3c_dual_target_lab_controller.v`: End-to-end regression for the new dual-target CMOD lab controller, including boot, polling, manual register reads/writes, and target LED control.
+- `tb/tb_i3c_dual_target_lab_controller.v`: End-to-end regression for the dual-target CMOD lab controller, including boot, polling, manual register reads/writes, and target LED control. Parameterized with `USE_ENTDAA`: default run exercises the `SETDASA` boot path, the `-entdaa` Makefile target runs the same scenario with `ENTDAA` discovery instead. Runs at `I3C_SDR_HZ=4_000_000` to match the hardware-validated rate once the 2-stage target synchronizers are active.
 - `tb/tb_i3c_known_target_hub.v`: End-to-end regression for the fixed known-target hub path, covering verified boot, scheduled service, targeted endpoint recovery after dynamic-address loss, and fault-diagnostic IBI policy handling.
 - `tb/tb_i3c_event_policy_ccc.v`: Integration regression for `ENEC`/`DISEC` target policy updates and mirrored controller-side event-mask state.
 - `tb/tb_i3c_reset_status_policy.v`: Integration regression for direct `RSTACT`/`GETSTATUS`, broadcast `RSTDAA`/`SETAASA`, and mirrored controller-side reset/status policy tracking across recovery transitions.
@@ -362,6 +362,8 @@ Expected result:
 - `sim-entdaa` prints `PASS` for the single-target `ENTDAA` baseline
 - `sim-entdaa-multi` prints `PASS` for the multi-target `ENTDAA` sequencing baseline
 - `sim-entdaa-stress` prints `PASS` for the six-target `ENTDAA` inventory stress baseline
+- `sim-dual-target-lab-controller` prints `PASS` for the dual-target lab controller booted via `SETDASA` (default, `USE_ENTDAA=0`)
+- `sim-dual-target-lab-controller-entdaa` prints `PASS` for the same controller booted via `ENTDAA` (`USE_ENTDAA=1`, overrides the TB parameter on the iverilog command line)
 - `sim-scheduler` prints `PASS` for cadence-aware round-robin service selection and service-period gating
 - `sim-ctrl-top-service` prints `PASS` for end-to-end scheduled write-then-read service templates plus success/NACK service-statistics capture through the controller top integration path
 - `sim-five-target-sampling-system` prints `PASS` for the five-endpoint reference system with equal-rate polling and 10-byte payload capture

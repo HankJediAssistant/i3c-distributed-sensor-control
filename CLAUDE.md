@@ -25,7 +25,7 @@ The goal is a real, working I3C hardware platform — not just simulation. We co
 
 ---
 
-## Current State (as of Mar 31, 2026)
+## Current State (as of Apr 15, 2026)
 
 ### ✅ Phase 1 — Dual-Target Internal Lab (COMPLETE)
 
@@ -77,18 +77,37 @@ SCL Bus: M4 + N2 + N1 ──┴── 2.2kΩ ── 3.3V
 
 ---
 
-## 🎯 Phase 3 — TDK InfantSense IMU Integration (NEXT)
+## 🎯 Phase 3 — TDK ICM-42605 IMU Integration (IN PROGRESS)
 
-The external bus is ready. The next milestone is connecting a **real I3C sensor** — specifically the **TDK InfantSense IMU** — to the physical bus pins.
+The external bus is ready. The next milestone is connecting a **real I3C sensor** — the **TDK/InvenSense ICM-42605** on the EV_ICM-42605 evaluation board — to the physical bus pins.
 
-### What needs to happen:
-1. Confirm TDK part number → determine I3C static/dynamic address, supported CCCs, payload format
-2. Update controller to support `ENTDAA` (Dynamic Address Assignment) for unknown targets
-3. Replace synthetic payload with real IMU data parser (accel/gyro)
-4. Update backend + dashboard to display real sensor data
+### Phase 3 plan (stored at `~/.claude/plans/zany-plotting-ladybug.md`):
+- **Phase A — Hardware bring-up** (no RTL): bypass EV-board pullups, strap AD0→GND, wire IMU to DIP-5/DIP-6. ⏳ **Pending** (scheduled for the next hardware session).
+- **Phase B — Wire ENTDAA into boot FSM** (feature-flagged): reuse existing `rtl/i3c_ctrl_entdaa.v`, add `USE_ENTDAA` parameter, 3-way PHY owner mux, parameterized testbench. ✅ **COMPLETE** — see below.
+- **Phase C** — Widen `PAYLOAD_BYTES` 10 → 14 (accel + gyro + temp). Not started.
+- **Phase D** — Swap emulated Target 1 for the real IMU, add `PWR_MGMT0` / `ACCEL_CONFIG0` / `GYRO_CONFIG0` init writes. Not started.
+- **Phase E** — Backend decode + dashboard render for IMU data. Not started.
+
+### ✅ Phase 3-B — ENTDAA boot path (COMPLETE, Apr 15, 2026)
+
+`rtl/fpga_test/i3c_dual_target_lab_controller.v` gained a `USE_ENTDAA` parameter (default `0`). When set to `1`, the boot FSM routes through a new ENTDAA state group (`ST_BOOT_ENTDAA_REQ/WAIT_DISCOVER/ASSIGN/WAIT_DONE`) that drives the existing `i3c_ctrl_entdaa` engine, assigning `DYN_ADDR_BASE + boot_index` to each discovered target before falling into the existing `GETPID`/`GETBCR`/`GETDCR` verification pass. When `USE_ENTDAA=0`, the original `SETDASA` path runs unchanged.
+
+- PHY ownership is now a 3-way mux (entdaa / dccc / txn) keyed on `state`.
+- Top-level exposure: `rtl/fpga_test/spartan7_i3c_external_bus_top.v` forwards a `USE_ENTDAA` parameter to the controller.
+- Testbench: `tb/tb_i3c_dual_target_lab_controller.v` is parameterized. Run either variant:
+  - `make sim-dual-target-lab-controller` — SETDASA path (PASS)
+  - `make sim-dual-target-lab-controller-entdaa` — ENTDAA path (PASS)
+- Existing `make sim-entdaa{,-multi,-stress}` regressions still PASS (no ENTDAA-engine regressions from the wiring change).
 
 ### Current DAA approach:
-The internal demo uses `SETDASA` (static address assignment) — known targets only. Real external sensors need `ENTDAA` for proper discovery.
+- Internal dual-target lab still boots via `SETDASA` by default (known static addresses 0x30/0x31).
+- ENTDAA is wired and simulation-validated; switch by passing `.USE_ENTDAA(1)` at the top level. The real IMU will require ENTDAA (static 0x68 doesn't match the existing `STATIC_ADDR_BASE`).
+
+### Known non-Phase-B sim failures (pre-existing, not caused by Phase B):
+- `sim-fpga-test-system`: `boot_error` at state 8, `dccc_nack=1` on target 0x30
+- `sim-known-target-hub`: `boot_error asserted`
+
+Both fail at the clean HEAD before any Phase B edits — confirmed by stashing the working tree and re-running.
 
 ---
 
@@ -126,15 +145,17 @@ cd software/dual_target_lab_frontend && npm run dev
 
 | File | Purpose |
 |------|---------|
-| `rtl/fpga_test/spartan7_i3c_external_bus_top.v` | External PHY bus top (current) |
+| `rtl/fpga_test/spartan7_i3c_external_bus_top.v` | External PHY bus top (current); exposes `USE_ENTDAA` parameter |
 | `rtl/fpga_test/spartan7_i3c_dual_target_lab_top.v` | Internal dual-target top |
-| `rtl/fpga_test/i3c_dual_target_lab_controller.v` | Lab controller |
+| `rtl/fpga_test/i3c_dual_target_lab_controller.v` | Lab controller; `USE_ENTDAA` selects SETDASA or ENTDAA boot |
 | `rtl/fpga_test/i3c_sensor_gpio_target_demo.v` | Target module |
+| `rtl/i3c_ctrl_entdaa.v` | Controller-side ENTDAA engine (reused by the lab controller) |
 | `rtl/uart_dual_target_lab_cmd_handler.v` | UART bridge |
 | `rtl/i3c_target_transport.v` | Target transport (has 2-stage sync) |
 | `rtl/i3c_target_ccc.v` | Target CCC handler (has 2-stage sync) |
 | `rtl/i3c_ctrl_direct_ccc.v` | Controller CCC (has ST_PRE_ACK fix) |
 | `constraints/spartan7_i3c_external_bus.xdc` | External bus pin constraints |
+| `tb/tb_i3c_dual_target_lab_controller.v` | Parameterized regression (SETDASA or ENTDAA path) |
 | `software/dual_target_lab_backend/app.py` | FastAPI backend |
 | `software/dual_target_lab_frontend/` | Next.js dashboard |
 | `docs/` | Architecture docs, UART protocol, roadmap |
@@ -143,8 +164,9 @@ cd software/dual_target_lab_frontend && npm run dev
 
 ## Git / GitHub
 
-- Repo: `HankJediAssistant` GitHub account
-- Main working branch: `codex/full-controller`
+- Repo: `HankJediAssistant` GitHub account (remote `hank`), plus `analogjedi` fork (remote `origin`)
+- Current working branch: `external-phy-bus`
+- Legacy merged branch: `codex/full-controller`
 - All major features developed via Claude Code PRs
 
 ---
@@ -155,3 +177,4 @@ cd software/dual_target_lab_frontend && npm run dev
 - **4 MHz is the practical limit** on a breadboard with standard 2.2kΩ pullups — don't push it
 - **SETDASA vs ENTDAA** — static assignment is fine for known-target demos; real sensors need ENTDAA
 - The internal 12.5 MHz bus works without synchronizers because signals are clean FPGA wires — don't assume the same for external
+- **Simulation rate has to match the synthesis sync penalty** — after the 2-stage target synchronizers landed, `tb_i3c_dual_target_lab_controller.v` stopped passing at 12.5 MHz SDR in iverilog (sync latency eats too much of a 40 ns half-period). Lowered the TB to 4 MHz to match hardware; that's the rate the simulation should stay at unless the sync stages are removed.

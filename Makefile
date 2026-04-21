@@ -61,12 +61,13 @@ SIM_WAVE1_CCC_OUT := simv_wave1_ccc
 SIM_WAVE3_ACTIVITY_GROUP_OUT := simv_wave3_activity_group
 SIM_KNOWN_TARGET_HUB_OUT := simv_known_target_hub
 SIM_DUAL_TARGET_LAB_CONTROLLER_OUT := simv_dual_target_lab_controller
+SIM_DUAL_TARGET_LAB_CONTROLLER_ENTDAA_OUT := simv_dual_target_lab_controller_entdaa
 
-.PHONY: sim sim-rw sim-nack sim-target sim-daa sim-ccc sim-direct-ccc-write sim-direct-ccc-read sim-setdasa sim-getpid sim-getbcrdcr sim-getstatus sim-entdaa sim-entdaa-multi sim-entdaa-stress sim-scheduler sim-ctrl-top-service sim-five-target-sampling-system sim-fpga-test-system sim-event-policy-ccc sim-reset-status-policy sim-recovery-sequence sim-wave1-ccc sim-wave3-activity-group sim-known-target-hub sim-dual-target-lab-controller test clean
+.PHONY: sim sim-rw sim-nack sim-target sim-daa sim-ccc sim-direct-ccc-write sim-direct-ccc-read sim-setdasa sim-getpid sim-getbcrdcr sim-getstatus sim-entdaa sim-entdaa-multi sim-entdaa-stress sim-scheduler sim-ctrl-top-service sim-five-target-sampling-system sim-fpga-test-system sim-event-policy-ccc sim-reset-status-policy sim-recovery-sequence sim-wave1-ccc sim-wave3-activity-group sim-known-target-hub sim-dual-target-lab-controller sim-dual-target-lab-controller-entdaa test clean
 
 sim: test
 
-test: sim-rw sim-nack sim-target sim-daa sim-ccc sim-direct-ccc-write sim-direct-ccc-read sim-setdasa sim-getpid sim-getbcrdcr sim-getstatus sim-entdaa sim-entdaa-multi sim-entdaa-stress sim-scheduler sim-ctrl-top-service sim-five-target-sampling-system sim-fpga-test-system sim-event-policy-ccc sim-reset-status-policy sim-recovery-sequence sim-wave1-ccc sim-wave3-activity-group sim-known-target-hub sim-dual-target-lab-controller
+test: sim-rw sim-nack sim-target sim-daa sim-ccc sim-direct-ccc-write sim-direct-ccc-read sim-setdasa sim-getpid sim-getbcrdcr sim-getstatus sim-entdaa sim-entdaa-multi sim-entdaa-stress sim-scheduler sim-ctrl-top-service sim-five-target-sampling-system sim-fpga-test-system sim-event-policy-ccc sim-reset-status-policy sim-recovery-sequence sim-wave1-ccc sim-wave3-activity-group sim-known-target-hub sim-dual-target-lab-controller sim-dual-target-lab-controller-entdaa
 
 sim-rw:
 	iverilog -g2012 -Wall -o $(SIM_RW_OUT) $(RTL_SRCS) $(COMMON_TB_SRCS) tb/tb_i3c_sdr_controller.v
@@ -168,5 +169,11 @@ sim-dual-target-lab-controller:
 	iverilog -g2012 -Wall -o $(SIM_DUAL_TARGET_LAB_CONTROLLER_OUT) $(FPGA_TEST_RTL_SRCS) tb/tb_i3c_dual_target_lab_controller.v
 	vvp $(SIM_DUAL_TARGET_LAB_CONTROLLER_OUT)
 
+sim-dual-target-lab-controller-entdaa:
+	iverilog -g2012 -Wall -Ptb_i3c_dual_target_lab_controller.USE_ENTDAA=1 \
+		-o $(SIM_DUAL_TARGET_LAB_CONTROLLER_ENTDAA_OUT) \
+		$(FPGA_TEST_RTL_SRCS) tb/tb_i3c_dual_target_lab_controller.v
+	vvp $(SIM_DUAL_TARGET_LAB_CONTROLLER_ENTDAA_OUT)
+
 clean:
-	rm -f $(SIM_RW_OUT) $(SIM_NACK_OUT) $(SIM_TARGET_OUT) $(SIM_DAA_OUT) $(SIM_CCC_OUT) $(SIM_DIRECT_CCC_WRITE_OUT) $(SIM_DIRECT_CCC_READ_OUT) $(SIM_SETDASA_OUT) $(SIM_GETPID_OUT) $(SIM_GETBCRDCR_OUT) $(SIM_GETSTATUS_OUT) $(SIM_ENTDAA_OUT) $(SIM_ENTDAA_MULTI_OUT) $(SIM_ENTDAA_STRESS_OUT) $(SIM_SCHEDULER_OUT) $(SIM_CTRL_TOP_SERVICE_OUT) $(SIM_FIVE_TARGET_SAMPLING_OUT) $(SIM_FPGA_TEST_SYSTEM_OUT) $(SIM_EVENT_POLICY_CCC_OUT) $(SIM_RESET_STATUS_POLICY_OUT) $(SIM_RECOVERY_SEQUENCE_OUT) $(SIM_WAVE1_CCC_OUT) $(SIM_WAVE3_ACTIVITY_GROUP_OUT) $(SIM_KNOWN_TARGET_HUB_OUT) $(SIM_DUAL_TARGET_LAB_CONTROLLER_OUT) tb_i3c_sdr_controller.vcd tb_i3c_sdr_nack.vcd tb_i3c_target_transport.vcd tb_i3c_broadcast_ccc.vcd tb_i3c_direct_ccc_write.vcd tb_i3c_direct_ccc_read.vcd tb_i3c_setdasa.vcd tb_i3c_getpid.vcd tb_i3c_getbcrdcr.vcd tb_i3c_getstatus.vcd tb_i3c_entdaa.vcd tb_i3c_entdaa_multi.vcd tb_i3c_entdaa_stress.vcd tb_i3c_scheduler.vcd tb_i3c_ctrl_top_service.vcd tb_i3c_five_target_sampling_system.vcd tb_i3c_fpga_test_system.vcd tb_i3c_event_policy_ccc.vcd tb_i3c_reset_status_policy.vcd tb_i3c_recovery_sequence.vcd tb_i3c_wave1_ccc.vcd tb_i3c_wave3_activity_group.vcd tb_i3c_known_target_hub.vcd tb_i3c_dual_target_lab_controller.vcd
+	rm -f $(SIM_RW_OUT) $(SIM_NACK_OUT) $(SIM_TARGET_OUT) $(SIM_DAA_OUT) $(SIM_CCC_OUT) $(SIM_DIRECT_CCC_WRITE_OUT) $(SIM_DIRECT_CCC_READ_OUT) $(SIM_SETDASA_OUT) $(SIM_GETPID_OUT) $(SIM_GETBCRDCR_OUT) $(SIM_GETSTATUS_OUT) $(SIM_ENTDAA_OUT) $(SIM_ENTDAA_MULTI_OUT) $(SIM_ENTDAA_STRESS_OUT) $(SIM_SCHEDULER_OUT) $(SIM_CTRL_TOP_SERVICE_OUT) $(SIM_FIVE_TARGET_SAMPLING_OUT) $(SIM_FPGA_TEST_SYSTEM_OUT) $(SIM_EVENT_POLICY_CCC_OUT) $(SIM_RESET_STATUS_POLICY_OUT) $(SIM_RECOVERY_SEQUENCE_OUT) $(SIM_WAVE1_CCC_OUT) $(SIM_WAVE3_ACTIVITY_GROUP_OUT) $(SIM_KNOWN_TARGET_HUB_OUT) $(SIM_DUAL_TARGET_LAB_CONTROLLER_OUT) $(SIM_DUAL_TARGET_LAB_CONTROLLER_ENTDAA_OUT) tb_i3c_sdr_controller.vcd tb_i3c_sdr_nack.vcd tb_i3c_target_transport.vcd tb_i3c_broadcast_ccc.vcd tb_i3c_direct_ccc_write.vcd tb_i3c_direct_ccc_read.vcd tb_i3c_setdasa.vcd tb_i3c_getpid.vcd tb_i3c_getbcrdcr.vcd tb_i3c_getstatus.vcd tb_i3c_entdaa.vcd tb_i3c_entdaa_multi.vcd tb_i3c_entdaa_stress.vcd tb_i3c_scheduler.vcd tb_i3c_ctrl_top_service.vcd tb_i3c_five_target_sampling_system.vcd tb_i3c_fpga_test_system.vcd tb_i3c_event_policy_ccc.vcd tb_i3c_reset_status_policy.vcd tb_i3c_recovery_sequence.vcd tb_i3c_wave1_ccc.vcd tb_i3c_wave3_activity_group.vcd tb_i3c_known_target_hub.vcd tb_i3c_dual_target_lab_controller.vcd

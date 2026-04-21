@@ -2,8 +2,10 @@
 
 This document describes the dedicated CMOD S7 dual-target lab image:
 
-- top: `spartan7_i3c_dual_target_lab_top`
+- top (internal bus): `spartan7_i3c_dual_target_lab_top`
+- top (external PHY bus): `spartan7_i3c_external_bus_top`
 - controller: `rtl/fpga_test/i3c_dual_target_lab_controller.v`
+- ENTDAA engine: `rtl/i3c_ctrl_entdaa.v`
 - targets: `rtl/fpga_test/i3c_sensor_gpio_target_demo.v`
 - UART bridge: `rtl/uart_dual_target_lab_cmd_handler.v`
 
@@ -174,6 +176,24 @@ The frontend is intentionally small:
   - decode `GETPID`, `GETBCR`, `GETDCR`, `GETSTATUS`, `GETMWL`, `GETMRL`, `GETMXDS`, and `GETCAPS`
   - show raw response bytes plus decoded results
   - keep recent CCC history visible without disturbing the live operations view
+
+## Boot Path Selection (`USE_ENTDAA` parameter)
+
+Both `i3c_dual_target_lab_controller` and the external-bus top expose a `USE_ENTDAA` integer parameter (default `0`).
+
+| Value | Boot path | Use case |
+| --- | --- | --- |
+| `0` | `SETDASA` on each static address in `STATIC_ADDR_BASE + i` | Known-target internal lab demo (fastest, used by Phase 1 bitstream) |
+| `1` | `ENTDAA` discovery loop, followed by the same `GETPID`/`GETBCR`/`GETDCR` verification pass | External bus with real sensors (e.g. TDK ICM-42605 at static 0x68) |
+
+The ENTDAA path reuses `rtl/i3c_ctrl_entdaa.v` (PID/BCR/DCR capture + dynamic-address assignment) and walks `boot_index` from 0 to `ENDPOINT_COUNT-1`, assigning `DYN_ADDR_BASE + boot_index` to each discovered target. Failure at any point sets `boot_error` and routes to `ST_ERROR`, the same as the SETDASA path.
+
+Regression coverage:
+
+- `make sim-dual-target-lab-controller` — SETDASA boot (`USE_ENTDAA=0`)
+- `make sim-dual-target-lab-controller-entdaa` — ENTDAA boot (`USE_ENTDAA=1`, overrides the TB parameter via `-Ptb_i3c_dual_target_lab_controller.USE_ENTDAA=1`)
+
+Both testbenches run at `I3C_SDR_HZ = 4_000_000` (4 MHz), which matches the validated hardware rate once the target-side 2-stage input synchronizers are in play.
 
 ## CMOD LED Mapping (Dual-Target Lab Demo)
 

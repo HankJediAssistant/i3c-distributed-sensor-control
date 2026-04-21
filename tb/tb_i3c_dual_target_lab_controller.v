@@ -2,8 +2,19 @@
 
 module tb_i3c_dual_target_lab_controller;
 
+    // NOTE: I3C_SDR_HZ lowered from 12.5 MHz to 4 MHz after commit 4c70f28
+    // added 2-stage synchronizers to i3c_target_transport.v /
+    // i3c_target_ccc.v. The sync delay (~20 ns at 100 MHz clock) eats too
+    // much of a 40 ns half-period at 12.5 MHz, causing the controller to
+    // miss target ACKs. 4 MHz matches the validated hardware rate (see
+    // CLAUDE.md).
     localparam integer CLK_FREQ_HZ = 100_000_000;
-    localparam integer I3C_SDR_HZ  = 12_500_000;
+    localparam integer I3C_SDR_HZ  = 4_000_000;
+    // USE_ENTDAA=0 → SETDASA boot path (default, matches original bitstream).
+    // USE_ENTDAA=1 → ENTDAA boot path (Phase B ENTDAA integration).
+    // Override on the iverilog command line with
+    //   -Ptb_i3c_dual_target_lab_controller.USE_ENTDAA=1
+    parameter integer USE_ENTDAA  = 0;
 
     reg clk = 1'b0;
     reg rst_n = 1'b0;
@@ -61,7 +72,8 @@ module tb_i3c_dual_target_lab_controller;
 
     i3c_dual_target_lab_controller #(
         .CLK_FREQ_HZ(CLK_FREQ_HZ),
-        .I3C_SDR_HZ (I3C_SDR_HZ)
+        .I3C_SDR_HZ (I3C_SDR_HZ),
+        .USE_ENTDAA (USE_ENTDAA)
     ) dut (
         .clk                   (clk),
         .rst_n                 (rst_n),
@@ -260,6 +272,7 @@ module tb_i3c_dual_target_lab_controller;
     initial begin
         $dumpfile("tb_i3c_dual_target_lab_controller.vcd");
         $dumpvars(0, tb_i3c_dual_target_lab_controller);
+        $display("INFO: USE_ENTDAA=%0d I3C_SDR_HZ=%0d", USE_ENTDAA, I3C_SDR_HZ);
 
         host_cmd_valid       = 1'b0;
         host_cmd_read        = 1'b0;

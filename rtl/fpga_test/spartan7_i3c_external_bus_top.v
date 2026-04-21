@@ -15,7 +15,10 @@
 
 module spartan7_i3c_external_bus_top #(
     parameter integer CLK_FREQ_HZ = 100_000_000,
-    parameter integer I3C_SDR_HZ  =  4_000_000   // External bus: 4 MHz (breadboard limit)
+    parameter integer I3C_SDR_HZ  =  4_000_000,  // External bus: 4 MHz (breadboard limit)
+    // Phase-3 feature flag: 1 enables ENTDAA dynamic address assignment in
+    // the boot FSM; 0 preserves the legacy SETDASA-only behavior.
+    parameter integer USE_ENTDAA = 0
 ) (
     input  wire       clk_12mhz,
     input  wire       btn_reset,
@@ -328,7 +331,8 @@ module spartan7_i3c_external_bus_top #(
     // ----------------------------------------------------------------
     i3c_dual_target_lab_controller #(
         .CLK_FREQ_HZ (CLK_FREQ_HZ),
-        .I3C_SDR_HZ  (I3C_SDR_HZ)
+        .I3C_SDR_HZ  (I3C_SDR_HZ),
+        .USE_ENTDAA  (USE_ENTDAA)
     ) u_controller (
         .clk                   (clk_100m),
         .rst_n                 (demo_rst_n),

@@ -15,7 +15,11 @@ module i3c_dual_target_lab_controller #(
     parameter [7:0]  TARGET_DCR          = 8'h90,
     parameter [7:0]  SAMPLE_SELECTOR     = 8'h10,
     parameter [7:0]  CONTROL_SELECTOR    = 8'h04,
-    parameter [7:0]  RECOVERY_RSTACT_ACTION = 8'h02
+    parameter [7:0]  RECOVERY_RSTACT_ACTION = 8'h02,
+    // Phase-3 feature flag: when set, the boot FSM performs ENTDAA dynamic
+    // address assignment (via rtl/i3c_ctrl_entdaa.v) instead of SETDASA.
+    // Default 0 preserves the existing SETDASA-only behavior.
+    parameter integer USE_ENTDAA             = 0
 ) (
     input  wire                                   clk,
     input  wire                                   rst_n,
@@ -127,6 +131,11 @@ module i3c_dual_target_lab_controller #(
     localparam [5:0] ST_RUN_HOST_DCCC_WAIT = 6'd36;
     localparam [5:0] ST_RUN_HOST_BCCC_REQ  = 6'd37;
     localparam [5:0] ST_RUN_HOST_BCCC_WAIT = 6'd38;
+    // ENTDAA boot-path states (used only when USE_ENTDAA != 0)
+    localparam [5:0] ST_BOOT_ENTDAA_REQ           = 6'd39;
+    localparam [5:0] ST_BOOT_ENTDAA_WAIT_DISCOVER = 6'd40;
+    localparam [5:0] ST_BOOT_ENTDAA_ASSIGN        = 6'd41;
+    localparam [5:0] ST_BOOT_ENTDAA_WAIT_DONE     = 6'd42;
 
     localparam [1:0] OP_NONE           = 2'd0;
     localparam [1:0] OP_SCHEDULE_READ  = 2'd1;
@@ -200,6 +209,24 @@ module i3c_dual_target_lab_controller #(
     wire       dccc_sda_o;
     wire       dccc_sda_oe;
 
+    // ENTDAA engine signals (active only when USE_ENTDAA != 0)
+    reg         entdaa_cmd_valid;
+    wire        entdaa_cmd_ready;
+    wire        entdaa_discover_valid;
+    wire [47:0] entdaa_discover_pid;
+    wire [7:0]  entdaa_discover_bcr;
+    wire [7:0]  entdaa_discover_dcr;
+    reg         entdaa_assign_valid;
+    reg  [6:0]  entdaa_assign_dynamic_addr;
+    wire        entdaa_done;
+    wire        entdaa_nack;
+    wire [6:0]  entdaa_assigned_addr;
+    wire        entdaa_busy;
+    wire        entdaa_scl_o;
+    wire        entdaa_scl_oe;
+    wire        entdaa_sda_o;
+    wire        entdaa_sda_oe;
+
     wire dccc_bus_owner = (state == ST_BOOT_SETDASA_REQ) ||
                           (state == ST_BOOT_SETDASA_WAIT) ||
                           (state == ST_BOOT_GETPID_REQ) ||
@@ -216,6 +243,11 @@ module i3c_dual_target_lab_controller #(
                           (state == ST_RUN_HOST_DCCC_WAIT) ||
                           (state >= ST_RECOVER_GETSTATUS_REQ && state <= ST_RECOVER_RECHECK_WAIT) ||
                           (state == ST_ERROR);
+
+    wire entdaa_bus_owner = (state == ST_BOOT_ENTDAA_REQ) ||
+                            (state == ST_BOOT_ENTDAA_WAIT_DISCOVER) ||
+                            (state == ST_BOOT_ENTDAA_ASSIGN) ||
+                            (state == ST_BOOT_ENTDAA_WAIT_DONE);
 
     integer i;
 
@@ -351,10 +383,10 @@ module i3c_dual_target_lab_controller #(
 
     assign host_cmd_ready = (state == ST_RUN_IDLE);
     assign host_ccc_ready = (state == ST_RUN_IDLE);
-    assign scl_o  = dccc_bus_owner ? dccc_scl_o  : txn_scl_o;
-    assign scl_oe = dccc_bus_owner ? dccc_scl_oe : txn_scl_oe;
-    assign sda_o  = dccc_bus_owner ? dccc_sda_o  : txn_sda_o;
-    assign sda_oe = dccc_bus_owner ? dccc_sda_oe : txn_sda_oe;
+    assign scl_o  = entdaa_bus_owner ? entdaa_scl_o  : (dccc_bus_owner ? dccc_scl_o  : txn_scl_o);
+    assign scl_oe = entdaa_bus_owner ? entdaa_scl_oe : (dccc_bus_owner ? dccc_scl_oe : txn_scl_oe);
+    assign sda_o  = entdaa_bus_owner ? entdaa_sda_o  : (dccc_bus_owner ? dccc_sda_o  : txn_sda_o);
+    assign sda_oe = entdaa_bus_owner ? entdaa_sda_oe : (dccc_bus_owner ? dccc_sda_oe : txn_sda_oe);
 
     i3c_ctrl_direct_ccc #(
         .CLK_FREQ_HZ   (CLK_FREQ_HZ),
@@ -439,9 +471,38 @@ module i3c_dual_target_lab_controller #(
 
     assign ccc_txn_req_ready = txn_req_ready;
 
+    // ENTDAA engine — drives the bus during the ENTDAA boot-path states only.
+    // When USE_ENTDAA == 0, its cmd_valid is never asserted, so it stays in
+    // IDLE and its PHY outputs are ignored by the mux above.
+    i3c_ctrl_entdaa #(
+        .CLK_FREQ_HZ   (CLK_FREQ_HZ),
+        .I3C_SDR_HZ    (I3C_SDR_HZ),
+        .PUSH_PULL_DATA(1)
+    ) u_entdaa (
+        .clk                 (clk),
+        .rst_n               (rst_n),
+        .cmd_valid           (entdaa_cmd_valid),
+        .cmd_ready           (entdaa_cmd_ready),
+        .discover_valid      (entdaa_discover_valid),
+        .discover_pid        (entdaa_discover_pid),
+        .discover_bcr        (entdaa_discover_bcr),
+        .discover_dcr        (entdaa_discover_dcr),
+        .assign_valid        (entdaa_assign_valid),
+        .assign_dynamic_addr (entdaa_assign_dynamic_addr),
+        .done                (entdaa_done),
+        .nack                (entdaa_nack),
+        .assigned_addr       (entdaa_assigned_addr),
+        .busy                (entdaa_busy),
+        .scl_o               (entdaa_scl_o),
+        .scl_oe              (entdaa_scl_oe),
+        .sda_o               (entdaa_sda_o),
+        .sda_oe              (entdaa_sda_oe),
+        .sda_i               (sda_i)
+    );
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state                     <= ST_BOOT_SETDASA_REQ;
+            state                     <= (USE_ENTDAA != 0) ? ST_BOOT_ENTDAA_REQ : ST_BOOT_SETDASA_REQ;
             boot_index                <= 1'b0;
             sched_index               <= 1'b0;
             active_target             <= 1'b0;
@@ -472,6 +533,9 @@ module i3c_dual_target_lab_controller #(
             dccc_tx_len               <= 8'h00;
             dccc_rx_len               <= 8'h00;
             dccc_tx_data              <= 48'h0;
+            entdaa_cmd_valid          <= 1'b0;
+            entdaa_assign_valid       <= 1'b0;
+            entdaa_assign_dynamic_addr<= 7'h00;
             host_rsp_valid            <= 1'b0;
             host_rsp_error            <= 1'b0;
             host_rsp_len              <= 8'h00;
@@ -497,6 +561,8 @@ module i3c_dual_target_lab_controller #(
             txn_req_valid  <= 1'b0;
             ccc_valid      <= 1'b0;
             dccc_cmd_valid <= 1'b0;
+            entdaa_cmd_valid    <= 1'b0;
+            entdaa_assign_valid <= 1'b0;
             host_rsp_valid <= 1'b0;
             host_ccc_rsp_valid <= 1'b0;
             recovery_active <= (state >= ST_RECOVER_GETSTATUS_REQ) && (state <= ST_RECOVER_RECHECK_WAIT);
@@ -507,6 +573,59 @@ module i3c_dual_target_lab_controller #(
                 schedule_div_cnt <= schedule_div_cnt + 1'b1;
 
             case (state)
+                // --------------------------------------------------------
+                // ENTDAA boot-path (entered at reset when USE_ENTDAA != 0).
+                // One pass of the ENTDAA engine = one target discovered and
+                // assigned a dynamic address. We loop ENDPOINT_COUNT times
+                // (lowest-PID target wins arbitration each round), then fall
+                // through to the shared GETPID/GETBCR/... verification path.
+                // --------------------------------------------------------
+                ST_BOOT_ENTDAA_REQ: begin
+                    if (entdaa_cmd_ready) begin
+                        entdaa_cmd_valid <= 1'b1;
+                        state            <= ST_BOOT_ENTDAA_WAIT_DISCOVER;
+                    end
+                end
+
+                ST_BOOT_ENTDAA_WAIT_DISCOVER: begin
+                    if (entdaa_discover_valid) begin
+                        entdaa_assign_valid        <= 1'b1;
+                        entdaa_assign_dynamic_addr <= endpoint_dynamic_addr(boot_index);
+                        state                      <= ST_BOOT_ENTDAA_ASSIGN;
+                    end else if (entdaa_done) begin
+                        // Engine finished without emitting discover_valid →
+                        // no target responded to the broadcast. Treat as
+                        // boot failure (we expect ENDPOINT_COUNT targets).
+                        boot_error <= 1'b1;
+                        state      <= ST_ERROR;
+                    end
+                end
+
+                ST_BOOT_ENTDAA_ASSIGN: begin
+                    // entdaa_assign_valid was pulsed in the prior cycle via
+                    // the default-to-0 clear; the engine latches assign on
+                    // the first cycle it's asserted in ST_WAIT_ASSIGN.
+                    state <= ST_BOOT_ENTDAA_WAIT_DONE;
+                end
+
+                ST_BOOT_ENTDAA_WAIT_DONE: begin
+                    if (entdaa_done) begin
+                        if (entdaa_nack) begin
+                            boot_error <= 1'b1;
+                            state      <= ST_ERROR;
+                        end else if (boot_index == ENDPOINT_COUNT - 1) begin
+                            // All targets discovered — reset boot_index and
+                            // continue into the verification pass starting
+                            // with GETPID on endpoint 0.
+                            boot_index <= {INDEX_W{1'b0}};
+                            state      <= ST_BOOT_GETPID_REQ;
+                        end else begin
+                            boot_index <= boot_index + 1'b1;
+                            state      <= ST_BOOT_ENTDAA_REQ;
+                        end
+                    end
+                end
+
                 ST_BOOT_SETDASA_REQ: begin
                     if (dccc_cmd_ready) begin
                         dccc_cmd_valid   <= 1'b1;
@@ -710,7 +829,10 @@ module i3c_dual_target_lab_controller #(
                         state     <= ST_RUN_IDLE;
                     end else begin
                         boot_index <= boot_index + 1'b1;
-                        state      <= ST_BOOT_SETDASA_REQ;
+                        // ENTDAA path already assigned every target; skip
+                        // the per-target SETDASA and resume verification.
+                        state      <= (USE_ENTDAA != 0) ? ST_BOOT_GETPID_REQ
+                                                        : ST_BOOT_SETDASA_REQ;
                     end
                 end
 
