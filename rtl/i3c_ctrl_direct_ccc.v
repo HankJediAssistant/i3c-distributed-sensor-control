@@ -44,7 +44,8 @@ module i3c_ctrl_direct_ccc #(
     localparam [4:0] ST_ACK_L         = 5'd5;
     localparam [4:0] ST_ACK_H         = 5'd6;
     localparam [4:0] ST_PRE_RSTART    = 5'd17; // SCL low to release target SDA before Sr
-    localparam [4:0] ST_PRE_ACK       = 5'd18; // SCL low to release controller SDA before T-bit
+    localparam [4:0] ST_PRE_ACK       = 5'd18; // SCL low to release controller SDA before target T-bit (writes)
+    localparam [4:0] ST_PRE_T_BIT     = 5'd19; // SCL low to release target SDA before controller T-bit (reads)
     localparam [4:0] ST_RSTART_A      = 5'd7;
     localparam [4:0] ST_RSTART_B      = 5'd8;
     localparam [4:0] ST_RX_BIT_L      = 5'd9;
@@ -350,11 +351,30 @@ module i3c_ctrl_direct_ccc #(
                         if (bit_idx == 0) begin
                             rsp_rdata[rx_idx*8 +: 8] <= {shreg[7:1], sda_i};
                             rsp_rx_count             <= rx_idx + 1'b1;
-                            state                    <= ST_MASTER_ACK_L;
+                            // When driving push-pull, insert a release gap so the
+                            // target can let SDA float (accounting for its 2-stage
+                            // SCL synchronizer) before the controller drives the
+                            // T-bit HIGH.  Without this, the controller would push
+                            // HIGH while the target is still pulling LOW on its
+                            // last data bit, producing bus contention.
+                            state                    <= PUSH_PULL_DATA ? ST_PRE_T_BIT : ST_MASTER_ACK_L;
                         end else begin
                             bit_idx <= bit_idx - 1'b1;
                             state   <= ST_RX_BIT_L;
                         end
+                    end
+                end
+
+                // Extra half-period with SCL low and SDA released before the
+                // controller's T-bit on PH_TARGET_READ.  Mirrors ST_PRE_ACK,
+                // but releases on the read→T-bit handoff instead of the
+                // write→ACK handoff.  Only used when PUSH_PULL_DATA=1.
+                ST_PRE_T_BIT: begin
+                    scl_o  <= 1'b0;
+                    scl_oe <= 1'b1;
+                    set_sda(1'b1, 1'b1);
+                    if (tick) begin
+                        state <= ST_MASTER_ACK_L;
                     end
                 end
 

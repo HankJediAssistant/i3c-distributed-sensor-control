@@ -290,14 +290,17 @@ module i3c_ctrl_entdaa #(
                     end
                 end
 
+                // ENTDAA response T-bit: the target drives LOW to signal
+                // "I'm still participating, continue to next byte".  The
+                // controller MUST be open-drain (released) here regardless
+                // of PUSH_PULL_DATA — otherwise controller push-pull HIGH
+                // would fight against the target's pull-low.  This is the
+                // one read path where the T-bit is target-driven, not
+                // controller-driven, so push-pull is not applicable.
                 ST_MASTER_ACK_L: begin
                     scl_o  <= 1'b0;
                     scl_oe <= 1'b1;
-                    if (PUSH_PULL_DATA) begin
-                        set_sda(1'b1, 1'b0);
-                    end else begin
-                        set_sda(1'b1, 1'b1);
-                    end
+                    set_sda(1'b1, 1'b1);
                     if (tick) begin
                         state <= ST_MASTER_ACK_H;
                     end
@@ -306,11 +309,7 @@ module i3c_ctrl_entdaa #(
                 ST_MASTER_ACK_H: begin
                     scl_o  <= 1'b1;
                     scl_oe <= 1'b1;
-                    if (PUSH_PULL_DATA) begin
-                        set_sda(1'b1, 1'b0);
-                    end else begin
-                        set_sda(1'b1, 1'b1);
-                    end
+                    set_sda(1'b1, 1'b1);
                     if (tick) begin
                         if ((rx_idx + 1'b1) < 8) begin
                             rx_idx  <= rx_idx + 1'b1;

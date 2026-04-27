@@ -49,6 +49,7 @@ module i3c_bus_engine #(
     localparam [3:0] ST_STOP_B        = 4'd12;
     localparam [3:0] ST_STOP_C        = 4'd13;
     localparam [3:0] ST_DONE          = 4'd14;
+    localparam [3:0] ST_PRE_T_BIT     = 4'd15; // SCL low + SDA released before T-bit (reads, PP mode)
 
     localparam [1:0] PH_ADDR       = 2'd0;
     localparam [1:0] PH_WRITE_DATA = 2'd1;
@@ -270,11 +271,29 @@ module i3c_bus_engine #(
                         if (bit_idx == 0) begin
                             txn_rdata[rx_idx*8 +: 8] <= {shreg[7:1], sda_i};
                             txn_rx_count             <= rx_idx + 1'b1;
-                            state                    <= ST_MASTER_ACK_L;
+                            // Insert a release gap so the target can let go of
+                            // SDA (delayed by its 2-stage SCL sync) before the
+                            // controller drives the T-bit push-pull.  Without
+                            // this, controller-HIGH meets target-last-bit-LOW
+                            // and we get bus contention.  Mirrors the fix in
+                            // i3c_ctrl_direct_ccc.v.
+                            state                    <= PUSH_PULL_DATA ? ST_PRE_T_BIT : ST_MASTER_ACK_L;
                         end else begin
                             bit_idx <= bit_idx - 1'b1;
                             state   <= ST_RX_BIT_L;
                         end
+                    end
+                end
+
+                // Read→T-bit release gap (SCL low, SDA released).  Only used
+                // when PUSH_PULL_DATA=1 — OD-only reads don't need it because
+                // controller never drives HIGH actively, it only releases.
+                ST_PRE_T_BIT: begin
+                    scl_o  <= 1'b0;
+                    scl_oe <= 1'b1;
+                    set_sda(1'b1, 1'b1);
+                    if (tick) begin
+                        state <= ST_MASTER_ACK_L;
                     end
                 end
 
