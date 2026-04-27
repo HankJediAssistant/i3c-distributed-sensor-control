@@ -1,0 +1,218 @@
+I3C Target IP - register_selector / write_data / read_data: Intent and Use
+==========================================================================
+
+Repo: i3c-distributed-sensor-control
+Modules referenced: rtl/i3c_target_top.v, rtl/i3c_target_transport.v,
+                    rtl/fpga_test/i3c_sensor_gpio_target_demo.v
+
+
+SUMMARY
+-------
+
+These three signals form the user-application boundary of the I3C target
+core. They expose every byte the controller writes (write_data + strobe),
+the byte window the controller would read next (read_data), and a small
+convenience snapshot of the most-recent write (register_selector).
+
+The naming "register_selector" is aspirational, not enforced. It simply
+latches whatever the controller most recently wrote. Whether that byte
+acts as a register address depends entirely on how the user-application
+chooses to interpret the write stream.
+
+
+SIGNAL-BY-SIGNAL
+----------------
+
+At the boundary of i3c_target_top (rtl/i3c_target_top.v lines 25-30):
+
+    input  wire [8*MAX_READ_BYTES-1:0] read_data,         // user-app -> core
+    output wire [7:0]                  write_data,        // core -> user-app
+    output wire                        write_valid,       // strobe per byte
+    output wire [7:0]                  register_selector, // latched write byte
+
+
+1. write_data[7:0] + write_valid
+   --------------------------------
+   A byte stream from the controller. Every time the controller writes a
+   byte addressed to this target, write_data carries that byte for one
+   clock cycle and write_valid pulses high. It is transient -- the
+   user-application must latch it on the same cycle.
+
+   It is a stream, not a structured packet, because that is exactly how
+   I3C writes physically arrive: byte-by-byte, with no notion at the
+   transport layer of "this is the address byte" vs. "this is data".
+   The transport intentionally does not impose a register-access
+   protocol on top of raw bytes; that is left to the user-application,
+   so the user can layer on whatever register scheme they want
+   (single-byte register address, multi-byte address, command bytes,
+   anything).
+
+
+2. read_data[8*MAX_READ_BYTES-1:0]
+   --------------------------------
+   A wide window of bytes that the controller would see if it read right
+   now, presented all at once. As the controller pulls bytes out, the
+   transport state machine indexes into this window using its internal
+   read_byte_idx counter (rtl/i3c_target_transport.v lines 32, 51).
+
+   It is a window (not a stream) because reads must be ready
+   immediately. Once the controller starts clocking out bits, the target
+   has no time to compute the next byte before SCL needs the data on
+   SDA. So the user-application pre-stages MAX_READ_BYTES of "what the
+   controller would see if it read N bytes from here" and the transport
+   simply slices into it as the read advances.
+
+
+3. register_selector[7:0]
+   -----------------------
+   The last byte the controller wrote, latched. The complete
+   implementation lives in rtl/i3c_target_top.v at lines 60-63 and
+   107-113:
+
+       reg [7:0] register_selector_r;
+       assign register_selector = register_selector_r;
+       ...
+       always @(posedge clk or negedge rst_n) begin
+           if (!rst_n)             register_selector_r <= 8'h00;
+           else if (write_valid)   register_selector_r <= write_data;
+       end
+
+   That is the entire logic. It is a one-line wrapper that snaps
+   write_data on every write_valid. The name is aspirational: in the
+   typical I2C/I3C register-access pattern, the first write byte of a
+   transaction is interpreted as the register address (the "selector"),
+   and subsequent writes are data for that register. IF the
+   user-application uses this signal that way (sampling it only after
+   the first write of a transaction), it functions as a register
+   pointer.
+
+   But the transport itself does not know "first" from "subsequent" --
+   every write_valid pulse overwrites the snapshot.
+
+
+THE ASYMMETRY BETWEEN WRITE AND READ
+------------------------------------
+
+Writes and reads expose data in deliberately different shapes:
+
+                   Write side                    Read side
+                   ----------                    ---------
+    Width:         1 byte (write_data)           N bytes (read_data)
+    Direction:     core -> user-app              user-app -> core
+    Cadence:       strobed (write_valid)         flat, always-valid bus
+    Sequencing:    user-app tracks "which       transport tracks via
+                   byte am I on"                 read_byte_idx
+
+This is not an inconsistency, it reflects the nature of each direction:
+
+  - Writes need ordering. The controller is sending you a sequence of
+    bytes; the user-application decides what each byte means in
+    context. Streaming each byte one at a time is the right shape for
+    that.
+
+  - Reads need readiness. The controller is about to clock data out at
+    line rate; the user-application has no opportunity to react
+    byte-by-byte. So the user-application provides a wide pre-staged
+    window and the transport walks through it.
+
+
+SPECIFIC CLARIFICATION: register_selector "DURING READS"
+--------------------------------------------------------
+
+A common observation when first reading the code:
+
+    "register_selector simply tracks write_data, so it is constant
+     while the controller reads but it changes in the opposite
+     direction."
+
+That is exactly correct, and the reasoning is straightforward:
+
+  - During a write transaction (controller -> target), write_valid
+    strobes on each byte, so register_selector_r updates each time.
+    It changes in the controller-writes direction.
+
+  - During a read transaction (target -> controller, the opposite
+    direction), no write_valid strobes occur because the controller is
+    not sending anything that needs latching. So register_selector_r is
+    frozen at whatever value the previous write left.
+
+This is by design. The signal is only meaningful immediately after a
+write; during a read it is stale-but-stable, which is exactly the
+behavior you want if you used it as a register pointer: the controller
+sets it during the write phase of a register-access transaction, then
+it remains stable through the subsequent read phase.
+
+
+WHAT REAL USER-APPLICATIONS DO WITH THESE SIGNALS
+-------------------------------------------------
+
+The reference application in this repo,
+rtl/fpga_test/i3c_sensor_gpio_target_demo.v, is instructive:
+
+  - It does NOT use the register_selector output at all.
+  - It implements its own register pointer (register_pointer_r) with
+    proper first-byte-vs-subsequent-byte sequencing.
+
+The relevant logic, lines 136-170:
+
+    if (write_valid) begin
+        if (write_count == 8'h00) begin
+            register_pointer_r <= write_data;        // 1st byte = address
+            write_count        <= 8'h01;
+        end else begin
+            case (register_pointer_r) ...            // store data
+            register_pointer_r <= register_pointer_r + 1'b1;  // auto-increment
+            write_count        <= write_count + 1'b1;
+        end
+    end
+
+This is the proper register-access pattern. The reason the demo cannot
+just use register_selector is that register_selector does not
+distinguish "address byte" from "data byte". If the controller writes
+two bytes 0x10, 0x55 (meaning "set register 0x10 to value 0x55"),
+register_selector ends up holding 0x55, not 0x10. It is the wrong
+abstraction for any multi-byte protocol.
+
+The demo also drives read_data combinationally from register_pointer_r,
+so any read transaction returns N bytes starting at the pointer:
+
+    for (idx = 0; idx < MAX_READ_BYTES; idx = idx + 1) begin
+        read_data_bus[idx*8 +: 8] = read_reg_byte(register_pointer_r + idx);
+    end
+
+That is the standard I2C/I3C register-window read semantics, and it
+relies entirely on the read_data input bus -- not on register_selector.
+
+
+GUIDANCE FOR USER-APPLICATIONS
+------------------------------
+
+1. Treat write_data + write_valid as a byte stream. Build whatever
+   register-access protocol you want on top of it in the wrapper.
+
+2. Treat read_data as "what the controller would see if it started
+   reading N bytes right now". Drive it combinationally from your
+   wrapper's register state.
+
+3. Ignore register_selector unless your protocol is "every single write
+   is a one-byte register address with no following data". It is a
+   cheap convenience output that latches write_data unconditionally;
+   for any multi-byte protocol it is the wrong abstraction.
+
+   Implement a proper register pointer in your wrapper, the way
+   i3c_sensor_gpio_target_demo.v does.
+
+
+WHY register_selector EXISTS AT ALL
+-----------------------------------
+
+It is a legacy convenience output. It was useful for very simple
+single-byte-address targets (e.g. early bring-up, or targets where the
+register pointer never moves and every write addresses the same byte).
+For anything with multi-byte transactions or auto-increment, the user
+must implement their own pointer logic, and at that point
+register_selector adds nothing.
+
+If we were redesigning the IP today, we would either remove this output
+or rename it to something less suggestive (e.g. last_write_byte) so
+that engineers do not assume it is doing more than it is.
