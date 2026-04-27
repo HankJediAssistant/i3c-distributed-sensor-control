@@ -7,6 +7,15 @@ set project_dir "build/${project_name}"
 set part "xc7s25csga225-1"
 set top_module "spartan7_i3c_external_bus_top"
 
+# I3C SDR rate override.  Default 4 MHz to match prior bitstream behavior.
+# Overrides via env: I3C_SDR_HZ=8000000 vivado -mode batch -source ...
+if {[info exists env(I3C_SDR_HZ)]} {
+    set i3c_sdr_hz $env(I3C_SDR_HZ)
+} else {
+    set i3c_sdr_hz 4000000
+}
+puts "I3C_SDR_HZ override: $i3c_sdr_hz"
+
 # RTL source files
 set rtl_files [list \
     rtl/i3c_phy.v \
@@ -73,6 +82,9 @@ if {[file exists $xdc_file]} {
 
 # Set top module
 set_property top $top_module [current_fileset]
+
+# Pass I3C_SDR_HZ as a Verilog generic to the top module
+set_property generic "I3C_SDR_HZ=$i3c_sdr_hz" [current_fileset]
 
 # Update compile order
 update_compile_order -fileset sources_1

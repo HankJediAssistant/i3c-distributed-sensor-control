@@ -10,13 +10,19 @@ module i3c_target_top #(
     parameter [15:0] TARGET_MAX_READ_LEN  = 16'h0010,
     parameter [7:0]  TARGET_IBI_DATA_LEN  = 8'h00,
     parameter [15:0] TARGET_MXDS          = 16'h0860,
-    parameter [31:0] TARGET_CAPS          = 32'h0000_0000
+    parameter [31:0] TARGET_CAPS          = 32'h0000_0000,
+    // When 1, read-data bits are driven push-pull on SDA (direct-CCC GET* reads
+    // and transport-layer reads). ENTDAA response remains open-drain always.
+    // When 0 (default), target is open-drain only — preserves legacy behavior
+    // for all internal wired-AND top-level wrappers and their testbenches.
+    parameter integer USE_PUSH_PULL       = 0
 ) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       scl,
     input  wire       sda,
     output wire       sda_oe,
+    output wire       sda_o,
 
     input  wire       clear_dynamic_addr,
     input  wire       assign_dynamic_addr_valid,
@@ -55,12 +61,19 @@ module i3c_target_top #(
     wire ccc_seen;
     wire transport_sda_drive_en;
     wire ccc_sda_drive_en;
+    wire transport_sda_o;
+    wire ccc_sda_o;
     wire target_assign_dynamic_addr_valid;
     wire [6:0] target_assign_dynamic_addr;
     reg  [7:0] register_selector_r;
 
     assign register_selector = register_selector_r;
     assign sda_oe = transport_sda_drive_en | ccc_sda_drive_en;
+    // OR the data bits — at most one submodule drives a data byte at a time
+    // (transport handles addressed read/write; CCC handler holds off transport
+    // via transport_holdoff during CCC sequences).  When neither asserts PP,
+    // sda_o is 0 but sda_oe gates it out via sda_t=1 (high-Z) at the PHY.
+    assign sda_o  = transport_sda_o | ccc_sda_o;
 
     assign target_assign_dynamic_addr_valid = assign_dynamic_addr_valid |
                                               ccc_setdasa_valid |
@@ -86,13 +99,15 @@ module i3c_target_top #(
     );
 
     i3c_target_transport #(
-        .MAX_READ_BYTES(MAX_READ_BYTES)
+        .MAX_READ_BYTES(MAX_READ_BYTES),
+        .USE_PUSH_PULL (USE_PUSH_PULL)
     ) u_target_transport (
         .clk         (clk),
         .rst_n       (rst_n),
         .scl         (scl),
         .sda         (sda),
         .sda_drive_en(transport_sda_drive_en),
+        .sda_o       (transport_sda_o),
         .suppress    (ccc_transport_holdoff),
         .read_data   (read_data),
         .alt_addr_valid(group_addr_valid),
@@ -120,13 +135,15 @@ module i3c_target_top #(
         .TARGET_MAX_READ_LEN (TARGET_MAX_READ_LEN),
         .TARGET_IBI_DATA_LEN (TARGET_IBI_DATA_LEN),
         .TARGET_MXDS         (TARGET_MXDS),
-        .TARGET_CAPS         (TARGET_CAPS)
+        .TARGET_CAPS         (TARGET_CAPS),
+        .USE_PUSH_PULL       (USE_PUSH_PULL)
     ) u_target_ccc (
         .clk              (clk),
         .rst_n            (rst_n),
         .scl              (scl),
         .sda              (sda),
         .sda_drive_en     (ccc_sda_drive_en),
+        .sda_o            (ccc_sda_o),
         .active_addr      (active_addr),
         .dynamic_addr_valid(dynamic_addr_valid),
         .provisional_id   (provisional_id),

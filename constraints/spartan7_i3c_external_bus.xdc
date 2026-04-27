@@ -60,6 +60,14 @@ set_false_path -to [get_ports dbg_nack_seen]
 set_property -dict { PACKAGE_PIN P1  IOSTANDARD LVCMOS33 } [get_ports dbg_tgt0_sda_oe]
 set_false_path -to [get_ports dbg_tgt0_sda_oe]
 
+## Debug: tgt0_sda_o — package pin H2 — push-pull output
+## Paired with dbg_tgt0_sda_oe on a scope: when sda_oe=HIGH and sda_o=HIGH,
+## the target is actively driving the bus HIGH push-pull (real I3C SDR).
+## When sda_oe=HIGH and sda_o=LOW, target is pulling the bus LOW (ACK or data '0').
+## Change the PACKAGE_PIN if H2 conflicts with anything on your bench.
+set_property -dict { PACKAGE_PIN H2  IOSTANDARD LVCMOS33 } [get_ports dbg_tgt0_sda_o]
+set_false_path -to [get_ports dbg_tgt0_sda_o]
+
 ## ----------------------------------------------------------------
 ## I3C timing — false-path the async pad read-back
 ## ----------------------------------------------------------------

@@ -1,13 +1,17 @@
 `timescale 1ns/1ps
 
 module i3c_target_transport #(
-    parameter integer MAX_READ_BYTES = 4
+    parameter integer MAX_READ_BYTES = 4,
+    // When 1, target drives read-data bits push-pull (active high + low).
+    // When 0, target is open-drain only (pull-low or release) — legacy behavior.
+    parameter integer USE_PUSH_PULL = 0
 ) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       scl,
     input  wire       sda,
     output wire       sda_drive_en,
+    output wire       sda_o,
 
     input  wire       suppress,
     input  wire [6:0] target_addr,
@@ -31,7 +35,9 @@ module i3c_target_transport #(
     reg [3:0] bit_pos;
     reg [7:0] read_byte_idx;
     reg [7:0] rx_shift;
-    reg       sda_drive_low;
+    reg       sda_drive_low;   // open-drain pull-low (ACK, or legacy OD read data)
+    reg       sda_pp_en;       // push-pull drive enable (read data when USE_PUSH_PULL=1)
+    reg       sda_o_reg;       // push-pull data bit
     reg       ack_pending;
     reg       addr_match;
     reg       rw_latched;
@@ -50,7 +56,11 @@ module i3c_target_transport #(
 
     wire [7:0] current_read_byte = get_read_byte(read_data, read_byte_idx);
 
-    assign sda_drive_en = sda_drive_low;
+    assign sda_drive_en = sda_drive_low | sda_pp_en;
+    // Only expose the data bit while actively push-pull driving.  Otherwise
+    // the target_top OR with the CCC submodule's sda_o would smuggle stale
+    // PP data through an OD-ACK drive window and flip it HIGH.
+    assign sda_o        = sda_pp_en & sda_o_reg;
 
     // 2-stage synchronizers for external SCL/SDA inputs
     // Prevents metastability with slow external edges
@@ -95,6 +105,8 @@ module i3c_target_transport #(
             read_byte_idx <= 8'd0;
             rx_shift      <= 8'h00;
             sda_drive_low <= 1'b0;
+            sda_pp_en     <= 1'b0;
+            sda_o_reg     <= 1'b0;
             ack_pending   <= 1'b0;
             addr_match    <= 1'b0;
             rw_latched    <= 1'b0;
@@ -114,6 +126,7 @@ module i3c_target_transport #(
                 read_byte_idx <= 8'd0;
                 rx_shift      <= 8'h00;
                 sda_drive_low <= 1'b0;
+                sda_pp_en     <= 1'b0;
                 ack_pending   <= 1'b0;
                 addr_match    <= 1'b0;
                 rw_latched    <= 1'b0;
@@ -123,18 +136,33 @@ module i3c_target_transport #(
                 phase         <= P_IDLE;
                 bit_pos       <= 4'd0;
                 sda_drive_low <= 1'b0;
+                sda_pp_en     <= 1'b0;
                 ack_pending   <= 1'b0;
                 selected      <= 1'b0;
             end else if (scl_falling) begin
-                // Drive SDA for ACK / read data on falling SCL edge
+                // Drive SDA for ACK / read data on falling SCL edge.
+                // ACK/addressing phases are always open-drain (pull-low or release).
+                // Read data bits may be push-pull when USE_PUSH_PULL=1 — controller
+                // releases SDA between bytes (T-bit), so only one device drives.
                 if (suppress) begin
                     sda_drive_low <= 1'b0;
+                    sda_pp_en     <= 1'b0;
                 end else if (ack_pending && (phase == P_ADDR || phase == P_WRITE) && (bit_pos == 4'd8)) begin
                     sda_drive_low <= addr_match;
+                    sda_pp_en     <= 1'b0;
                 end else if (phase == P_READ && bit_pos < 4'd8) begin
-                    sda_drive_low <= ~current_read_byte[7 - bit_pos];
+                    if (USE_PUSH_PULL) begin
+                        sda_drive_low <= 1'b0;
+                        sda_pp_en     <= 1'b1;
+                        sda_o_reg     <= current_read_byte[7 - bit_pos];
+                    end else begin
+                        sda_drive_low <= ~current_read_byte[7 - bit_pos];
+                        sda_pp_en     <= 1'b0;
+                    end
                 end else begin
+                    // T-bit slot / post-byte release — high-Z so controller can drive T-bit
                     sda_drive_low <= 1'b0;
+                    sda_pp_en     <= 1'b0;
                 end
             end else if (scl_rising) begin
                 // Sample data / advance state machine on rising SCL edge

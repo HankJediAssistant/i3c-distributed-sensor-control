@@ -15,10 +15,14 @@
 
 module spartan7_i3c_external_bus_top #(
     parameter integer CLK_FREQ_HZ = 100_000_000,
-    parameter integer I3C_SDR_HZ  =  4_000_000,  // External bus: 4 MHz (breadboard limit)
+    parameter integer I3C_SDR_HZ  =  4_000_000,  // External bus rate — see build Tcl overrides for 8/12.5 MHz
     // Phase-3 feature flag: 1 enables ENTDAA dynamic address assignment in
     // the boot FSM; 0 preserves the legacy SETDASA-only behavior.
-    parameter integer USE_ENTDAA = 0
+    parameter integer USE_ENTDAA = 0,
+    // Phase-3-B' feature flag: 1 enables target-side push-pull SDA during
+    // SDR read data phases (real I3C SDR).  0 preserves the legacy
+    // open-drain-only behavior (I2C FM+ with dynamic address).
+    parameter integer USE_PUSH_PULL = 1
 ) (
     input  wire       clk_12mhz,
     input  wire       btn_reset,
@@ -47,7 +51,12 @@ module spartan7_i3c_external_bus_top #(
     // Debug: tgt0_sda_oe visible on DIP pin 8 (P1) — push-pull output.
     // HIGH whenever Target 0 is driving its SDA line (ACK, data, etc.)
     // Probe this to confirm the target is responding to bus transactions.
-    output wire       dbg_tgt0_sda_oe
+    output wire       dbg_tgt0_sda_oe,
+
+    // Debug: tgt0_sda_o — the push-pull data bit Target 0 is currently
+    // asserting.  Paired with dbg_tgt0_sda_oe on a scope, this proves the
+    // target is actively driving SDA high (vs. relying on the pull-up RC).
+    output wire       dbg_tgt0_sda_o
 );
 
     // ----------------------------------------------------------------
@@ -171,10 +180,12 @@ module spartan7_i3c_external_bus_top #(
     // Target signals
     // ----------------------------------------------------------------
     wire tgt0_sda_oe;
+    wire tgt0_sda_o;          // push-pull data bit driven onto the bus
     wire tgt0_scl_sense;
     wire tgt0_sda_sense;
 
     wire tgt1_sda_oe;
+    wire tgt1_sda_o;
     wire tgt1_scl_sense;
     wire tgt1_sda_sense;
 
@@ -194,12 +205,14 @@ module spartan7_i3c_external_bus_top #(
         .scl_o   ()                // controller doesn't read SCL back
     );
 
-    // Target 0 PHY: reads SCL, reads/drives SDA (open-drain low only)
+    // Target 0 PHY: reads SCL, drives SDA push-pull (real I3C SDR) when
+    // USE_PUSH_PULL=1.  Target asserts sda_o with the actual data bit and
+    // sda_oe for the drive window; ACK/ENTDAA phases still pull-low-only.
     i3c_phy u_phy_tgt0 (
         .sda_pin (tgt0_sda_pin),
         .scl_pin (tgt0_scl_pin),
-        .sda_t   (~tgt0_sda_oe),   // target drives low when sda_oe=1
-        .sda_i   (1'b0),           // targets only ever drive low
+        .sda_t   (~tgt0_sda_oe),   // T=0 → drive; T=1 → high-Z (T-bit, idle)
+        .sda_i   (tgt0_sda_o),     // real push-pull data bit
         .sda_o   (tgt0_sda_sense),
         .scl_t   (1'b1),           // target never drives SCL → always high-Z
         .scl_i   (1'b0),
@@ -211,7 +224,7 @@ module spartan7_i3c_external_bus_top #(
         .sda_pin (tgt1_sda_pin),
         .scl_pin (tgt1_scl_pin),
         .sda_t   (~tgt1_sda_oe),
-        .sda_i   (1'b0),
+        .sda_i   (tgt1_sda_o),
         .sda_o   (tgt1_sda_sense),
         .scl_t   (1'b1),
         .scl_i   (1'b0),
@@ -264,9 +277,10 @@ module spartan7_i3c_external_bus_top #(
     wire tgt1_indicator;
 
     // ----------------------------------------------------------------
-    // Debug output — tgt0_sda_oe on DIP pin 8
+    // Debug outputs
     // ----------------------------------------------------------------
     assign dbg_tgt0_sda_oe = tgt0_sda_oe;
+    assign dbg_tgt0_sda_o  = tgt0_sda_o;
 
     // ----------------------------------------------------------------
     // LED assignments
@@ -386,13 +400,15 @@ module spartan7_i3c_external_bus_top #(
         .STATIC_ADDR     (7'h30),
         .TARGET_INDEX    (0),
         .PROVISIONAL_ID  (48'h4100_0000_0011),
-        .TARGET_SIGNATURE(32'h534E_0100)
+        .TARGET_SIGNATURE(32'h534E_0100),
+        .USE_PUSH_PULL   (USE_PUSH_PULL)
     ) u_tgt0 (
         .clk              (clk_100m),
         .rst_n            (demo_rst_n),
         .scl              (tgt0_scl_sense),
         .sda              (tgt0_sda_sense),
         .sda_oe           (tgt0_sda_oe),
+        .sda_o            (tgt0_sda_o),
         .indicator_out    (tgt0_indicator),
         .sample_payload   (),
         .signature_word   (),
@@ -412,13 +428,15 @@ module spartan7_i3c_external_bus_top #(
         .STATIC_ADDR     (7'h31),
         .TARGET_INDEX    (1),
         .PROVISIONAL_ID  (48'h4100_0000_0012),
-        .TARGET_SIGNATURE(32'h534E_0101)
+        .TARGET_SIGNATURE(32'h534E_0101),
+        .USE_PUSH_PULL   (USE_PUSH_PULL)
     ) u_tgt1 (
         .clk              (clk_100m),
         .rst_n            (demo_rst_n),
         .scl              (tgt1_scl_sense),
         .sda              (tgt1_sda_sense),
         .sda_oe           (tgt1_sda_oe),
+        .sda_o            (tgt1_sda_o),
         .indicator_out    (tgt1_indicator),
         .sample_payload   (),
         .signature_word   (),

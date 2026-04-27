@@ -43,13 +43,19 @@ module i3c_target_ccc #(
     parameter [15:0] TARGET_MAX_READ_LEN  = 16'h0010,
     parameter [7:0]  TARGET_IBI_DATA_LEN  = 8'h00,
     parameter [15:0] TARGET_MXDS          = 16'h0860,
-    parameter [31:0] TARGET_CAPS          = 32'h0000_0000
+    parameter [31:0] TARGET_CAPS          = 32'h0000_0000,
+    // When 1, target drives direct-CCC read-data bits push-pull
+    // (GETPID / GETBCR / GETDCR / GETSTATUS / GETMWL / GETMRL / GETMXDS / GETCAPS).
+    // ENTDAA response bits remain open-drain unconditionally — arbitration phase
+    // requires multiple targets to wire-AND their PIDs bit-by-bit.
+    parameter integer USE_PUSH_PULL = 0
 ) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       scl,
     input  wire       sda,
     output wire       sda_drive_en,
+    output wire       sda_o,
     input  wire [6:0] active_addr,
     input  wire       dynamic_addr_valid,
     input  wire [47:0] provisional_id,
@@ -110,7 +116,9 @@ module i3c_target_ccc #(
     reg [7:0] current_ccc;
     reg       ack_pending;
     reg       ack_drive_low;
-    reg       sda_drive_low;
+    reg       sda_drive_low;   // open-drain pull-low (ACK, ENTDAA response, legacy OD reads)
+    reg       sda_pp_en;       // push-pull drive enable (direct-CCC read data when USE_PUSH_PULL=1)
+    reg       sda_o_reg;       // push-pull data bit
     reg       current_rw;
     reg       current_addr_is_ccc;
     reg       collecting_ccc_code;
@@ -254,7 +262,11 @@ module i3c_target_ccc #(
         end
     endfunction
 
-    assign sda_drive_en = sda_drive_low;
+    assign sda_drive_en = sda_drive_low | sda_pp_en;
+    // Gate the data bit by sda_pp_en — see the matching comment in
+    // i3c_target_transport.v.  Prevents a stale PP bit from leaking through
+    // the OR with the transport submodule during OD ACK windows.
+    assign sda_o        = sda_pp_en & sda_o_reg;
 
     // 2-stage synchronizers for external SCL/SDA inputs
     // Prevents metastability with slow external edges
@@ -302,6 +314,8 @@ module i3c_target_ccc #(
             ack_pending             <= 1'b0;
             ack_drive_low           <= 1'b0;
             sda_drive_low           <= 1'b0;
+            sda_pp_en               <= 1'b0;
+            sda_o_reg               <= 1'b0;
             current_rw              <= 1'b0;
             current_addr_is_ccc     <= 1'b0;
             collecting_ccc_code     <= 1'b0;
@@ -371,6 +385,7 @@ module i3c_target_ccc #(
                 ack_pending             <= 1'b0;
                 ack_drive_low           <= 1'b0;
                 sda_drive_low           <= 1'b0;
+                sda_pp_en               <= 1'b0;
                 data_expected           <= 2'd0;
                 data_count              <= 2'd0;
                 current_rw              <= 1'b0;
@@ -394,6 +409,7 @@ module i3c_target_ccc #(
                 ack_pending             <= 1'b0;
                 ack_drive_low           <= 1'b0;
                 sda_drive_low           <= 1'b0;
+                sda_pp_en               <= 1'b0;
                 current_rw              <= 1'b0;
                 current_addr_is_ccc     <= 1'b0;
                 collecting_ccc_code     <= 1'b0;
@@ -433,13 +449,28 @@ module i3c_target_ccc #(
                     transport_holdoff   <= 1'b0;
                 end
             end else if (scl_falling) begin
-                // Drive SDA for ACK / read data on falling SCL edge
+                // Drive SDA for ACK / read data on falling SCL edge.
+                // ACK and ENTDAA response bits MUST stay open-drain (arbitration
+                // phase where multiple targets can wire-AND their PIDs).
+                // Direct-CCC read data (GETPID/GETBCR/GETDCR/etc) goes push-pull
+                // when USE_PUSH_PULL=1 — only the addressed target responds, and
+                // the controller has released SDA for the T-bit handoff.
                 if (ack_pending) begin
                     sda_drive_low <= ack_drive_low;
+                    sda_pp_en     <= 1'b0;
                 end else if ((state == ST_READ) && (read_bit_pos < 4'd8)) begin
-                    sda_drive_low <= ~read_shift[7 - read_bit_pos[2:0]];
+                    if (USE_PUSH_PULL && (read_kind != READ_ENTDAA)) begin
+                        sda_drive_low <= 1'b0;
+                        sda_pp_en     <= 1'b1;
+                        sda_o_reg     <= read_shift[7 - read_bit_pos[2:0]];
+                    end else begin
+                        sda_drive_low <= ~read_shift[7 - read_bit_pos[2:0]];
+                        sda_pp_en     <= 1'b0;
+                    end
                 end else begin
+                    // T-bit slot / idle — release so controller can drive T-bit
                     sda_drive_low <= 1'b0;
+                    sda_pp_en     <= 1'b0;
                 end
             end else if (scl_rising) begin
                 // Data sampling and state machine on rising SCL edge

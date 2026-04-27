@@ -9,13 +9,16 @@ module i3c_sensor_gpio_target_demo #(
     parameter [47:0] PROVISIONAL_ID  = 48'h4100_0000_0011,
     parameter [7:0]  TARGET_BCR      = 8'h21,
     parameter [7:0]  TARGET_DCR      = 8'h90,
-    parameter [31:0] TARGET_SIGNATURE = 32'h534E_0001
+    parameter [31:0] TARGET_SIGNATURE = 32'h534E_0001,
+    // Thread through to i3c_target_top — see that module for semantics.
+    parameter integer USE_PUSH_PULL    = 0
 ) (
     input  wire        clk,
     input  wire        rst_n,
     input  wire        scl,
     input  wire        sda,
     output wire        sda_oe,
+    output wire        sda_o,
     output wire        indicator_out,
     output wire [79:0] sample_payload,
     output wire [31:0] signature_word,
@@ -174,13 +177,15 @@ module i3c_sensor_gpio_target_demo #(
         .STATIC_ADDR   (STATIC_ADDR),
         .PROVISIONAL_ID(PROVISIONAL_ID),
         .TARGET_BCR    (TARGET_BCR),
-        .TARGET_DCR    (TARGET_DCR)
+        .TARGET_DCR    (TARGET_DCR),
+        .USE_PUSH_PULL (USE_PUSH_PULL)
     ) u_target_top (
         .clk                      (clk),
         .rst_n                    (rst_n),
         .scl                      (scl),
         .sda                      (sda),
         .sda_oe                   (sda_oe),
+        .sda_o                    (sda_o),
         .clear_dynamic_addr       (1'b0),
         .assign_dynamic_addr_valid(1'b0),
         .assign_dynamic_addr      (7'h00),
