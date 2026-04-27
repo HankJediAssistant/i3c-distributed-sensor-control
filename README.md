@@ -57,6 +57,8 @@ This variant brings SDA and SCL out to **physical FPGA pins** via IOBUF primitiv
 - Real open-drain bus topology with external pull-up resistors
 - Connection to actual I3C sensors (TDK/InvenSense, etc.)
 - True electrical validation of the I3C protocol
+- **Push-pull SDR data phases on the target side** (Phase 3-B') — actively-driven HIGH bits during reads, not pullup-RC-limited
+- **Hardware-validated up to 6.36 MHz I3C SDR** at 140 MHz sysclk with 1 kΩ pullups — see [docs/External_Bus_Performance.md](docs/External_Bus_Performance.md) for the full rate matrix, root-cause analysis of the bottleneck, and what would unlock higher rates
 
 ### Architecture
 
@@ -73,10 +75,17 @@ Instead of internal wired-AND resolution, each device (controller + 2 targets) g
 Connect on a breadboard:
 
 ```
-SDA Bus: L1 + M3 + M2 ──┬── 2.2kΩ ── 3.3V
+SDA Bus: L1 + M3 + M2 ──┬── 1kΩ ── 3.3V
                         │
-SCL Bus: M4 + N2 + N1 ──┴── 2.2kΩ ── 3.3V
+SCL Bus: M4 + N2 + P3 ──┴── 1kΩ ── 3.3V
 ```
+
+The current performance numbers in `docs/External_Bus_Performance.md`
+are measured with **1 kΩ pullups**.  2.2 kΩ also works at 4 MHz I3C
+but the OD recovery RC will dominate above that rate.
+
+(Note: the SCL pin for Target 1 is **P3** as set in the XDC;
+the legacy diagram showed N1.)
 
 ### Build & Program
 
@@ -84,12 +93,19 @@ SCL Bus: M4 + N2 + N1 ──┴── 2.2kΩ ── 3.3V
 # Source Vivado
 source /opt/Xilinx/2025.2/Vivado/settings64.sh
 
-# Build bitstream
+# Build bitstream — default I3C SDR rate is 4 MHz
 vivado -mode batch -source scripts/build_external_bus.tcl
+
+# Override the rate via env var (the build script honors I3C_SDR_HZ)
+I3C_SDR_HZ=6000000 vivado -mode batch -source scripts/build_external_bus.tcl
 
 # Program FPGA
 vivado -mode batch -source scripts/program_external_bus.tcl
 ```
+
+See [docs/External_Bus_Performance.md](docs/External_Bus_Performance.md)
+for the validated I3C-rate matrix and what's actually achievable on
+real hardware.
 
 ### Files
 
