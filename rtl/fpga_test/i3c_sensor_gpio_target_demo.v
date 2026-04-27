@@ -129,12 +129,28 @@ module i3c_sensor_gpio_target_demo #(
         end
     endfunction
 
+    // The case-mux inside read_reg_byte() is the longest combinational
+    // path in this design (~7-8 LUT levels per byte slot, replicated
+    // MAX_READ_BYTES times).  At 100 MHz it landed with ~0.7 ns slack;
+    // at 140 MHz the same path would fail to close.  Pipeline here by
+    // registering the read window once per system clock — the transport
+    // only samples this bus on scl_falling, which at 4 MHz I3C is once
+    // every ~35 sysclks at 140 MHz, so 1 cycle of latency is invisible.
+    wire [8*MAX_READ_BYTES-1:0] read_data_bus_comb;
+    reg  [8*MAX_READ_BYTES-1:0] read_data_bus_r;
     generate
         genvar idx;
         for (idx = 0; idx < MAX_READ_BYTES; idx = idx + 1) begin : g_read_window
-            assign read_data_bus[idx*8 +: 8] = read_reg_byte(register_pointer_r + idx[7:0]);
+            assign read_data_bus_comb[idx*8 +: 8] = read_reg_byte(register_pointer_r + idx[7:0]);
         end
     endgenerate
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) read_data_bus_r <= {8*MAX_READ_BYTES{1'b0}};
+        else        read_data_bus_r <= read_data_bus_comb;
+    end
+
+    assign read_data_bus = read_data_bus_r;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
